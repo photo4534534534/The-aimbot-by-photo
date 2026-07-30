@@ -1,0 +1,191 @@
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local Workspace = game:GetService("Workspace")
+local Camera = workspace.CurrentCamera
+local LocalPlayer = Players.LocalPlayer
+
+-- Settings
+local aimbotEnabled = false
+local teamCheckEnabled = true
+local wallCheckEnabled = true
+local lockTarget = true
+local aimPart = "Head"
+local smoothness = 0.18
+local fovRadius = 120
+local prediction = 0.08
+
+local aimKey = Enum.KeyCode.E
+local aimMouseButton = nil
+local currentTarget = nil
+
+-- Rayfield UI
+local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+
+local Window = Rayfield:CreateWindow({
+    Name = "photoaim bot",
+    LoadingTitle = "photo aimbot",
+    LoadingSubtitle = "by photo",
+    ConfigurationSaving = {Enabled = true, FolderName = "FutureAimbot", FileName = "Config"}
+})
+
+local MainTab = Window:CreateTab("Aimbot", 4483362458)
+local SettingsTab = Window:CreateTab("Settings", 4483362458)
+
+-- Toggles
+MainTab:CreateToggle({Name = "Enable Aimbot", CurrentValue = false, Callback = function(v) aimbotEnabled = v end})
+MainTab:CreateToggle({Name = "Team Check (ไม่ยิงเพื่อน)", CurrentValue = true, Callback = function(v) teamCheckEnabled = v end})
+MainTab:CreateToggle({Name = "Wall Check (ไม่เล็งผ่านกำแพง)", CurrentValue = true, Callback = function(v) wallCheckEnabled = v end})
+MainTab:CreateToggle({Name = "Lock Target (ยึดเป้าเดิม)", CurrentValue = true, Callback = function(v) lockTarget = v end})
+
+-- Keybind & Dropdown
+MainTab:CreateKeybind({Name = "Keyboard Keybind", CurrentKeybind = "E", HoldToInteract = true, Callback = function(k) aimKey = k end})
+
+MainTab:CreateDropdown({
+    Name = "Mouse Button", Options = {"None", "Left Click", "Right Click"}, CurrentOption = {"None"},
+    Callback = function(opt)
+        local c = opt[1]
+        aimMouseButton = (c == "Left Click" and Enum.UserInputType.MouseButton1) or 
+                         (c == "Right Click" and Enum.UserInputType.MouseButton2) or nil
+    end
+})
+
+MainTab:CreateDropdown({
+    Name = "Aim Part", Options = {"Head", "UpperTorso", "HumanoidRootPart", "LowerTorso"}, CurrentOption = {"Head"},
+    Callback = function(opt) aimPart = opt[1] end
+})
+
+-- Sliders
+SettingsTab:CreateSlider({Name = "FOV Radius", Range = {50, 400}, Increment = 5, CurrentValue = fovRadius, Callback = function(v) fovRadius = v; fovCircle.Radius = v end})
+SettingsTab:CreateSlider({Name = "Smoothness", Range = {0.05, 0.5}, Increment = 0.01, CurrentValue = smoothness, Callback = function(v) smoothness = v end})
+SettingsTab:CreateSlider({Name = "Prediction", Range = {0, 0.3}, Increment = 0.01, CurrentValue = prediction, Callback = function(v) prediction = v end})
+
+-- FOV Circle
+local fovCircle = Drawing.new("Circle")
+fovCircle.Thickness = 1.8
+fovCircle.NumSides = 100
+fovCircle.Radius = fovRadius
+fovCircle.Filled = false
+fovCircle.Color = Color3.fromRGB(0, 200, 255)
+fovCircle.Transparency = 0.75
+fovCircle.Visible = false
+
+local function isTeammate(player)
+    if not teamCheckEnabled then return false end
+    if not player.Team or not LocalPlayer.Team then return false end
+    return player.Team == LocalPlayer.Team
+end
+
+local function isAiming()
+    if not aimbotEnabled then return false end
+    local kb = UserInputService:IsKeyDown(aimKey)
+    local mb = aimMouseButton and UserInputService:IsMouseButtonPressed(aimMouseButton) or false
+    return kb or mb
+end
+
+local function isWallCheckPassed(targetPart)
+    if not wallCheckEnabled then return true end
+    
+    local origin = Camera.CFrame.Position
+    local direction = (targetPart.Position - origin).Unit * (targetPart.Position - origin).Magnitude
+    
+    local raycastParams = RaycastParams.new()
+    raycastParams.FilterDescendantsInstances = {LocalPlayer.Character}
+    raycastParams.FilterType = Enum.RaycastFilterType.Exclude
+    raycastParams.IgnoreWater = true
+    
+    local result = Workspace:Raycast(origin, direction, raycastParams)
+    
+    if result and result.Instance then
+        -- ตรวจว่าชนกับตัวเป้าหมายหรือไม่
+        if result.Instance:IsDescendantOf(targetPart.Parent) then
+            return true
+        end
+        return false -- มีกำแพงบัง
+    end
+    return true
+end
+
+local function isValidTarget(player)
+    if not player or not player.Character then return false end
+    local hum = player.Character:FindFirstChild("Humanoid")
+    if not hum or hum.Health <= 0 then return false end
+    if isTeammate(player) then return false end
+    return true
+end
+
+local function getClosestPlayer()
+    if lockTarget and currentTarget and isValidTarget(currentTarget) then
+        local targetPart = currentTarget.Character:FindFirstChild(aimPart) or currentTarget.Character:FindFirstChild("UpperTorso")
+        if targetPart and isWallCheckPassed(targetPart) then
+            local predPos = targetPart.Position + (targetPart.Velocity * prediction)
+            local screen, onScreen = Camera:WorldToViewportPoint(predPos)
+            if onScreen then
+                local mouse = UserInputService:GetMouseLocation()
+                local dist = (Vector2.new(screen.X, screen.Y) - mouse).Magnitude
+                if dist <= fovRadius + 40 then
+                    return currentTarget
+                end
+            end
+        end
+    end
+
+    -- หาเป้าใหม่
+    local closest = nil
+    local shortest = fovRadius + 40
+
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer and isValidTarget(player) then
+            local targetPart = player.Character:FindFirstChild(aimPart) or player.Character:FindFirstChild("UpperTorso")
+            if targetPart and isWallCheckPassed(targetPart) then
+                local predPos = targetPart.Position + (targetPart.Velocity * prediction)
+                local screenPos, onScreen = Camera:WorldToViewportPoint(predPos)
+                if onScreen then
+                    local mousePos = UserInputService:GetMouseLocation()
+                    local dist = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
+                    if dist < shortest then
+                        shortest = dist
+                        closest = player
+                    end
+                end
+            end
+        end
+    end
+
+    if closest then
+        currentTarget = closest
+    end
+    return closest
+end
+
+RunService.RenderStepped:Connect(function()
+    local currentlyAiming = isAiming()
+    
+    fovCircle.Position = UserInputService:GetMouseLocation()
+    fovCircle.Visible = currentlyAiming
+
+    if currentlyAiming then
+        local target = getClosestPlayer()
+        if target and target.Character then
+            local targetPart = target.Character:FindFirstChild(aimPart) or target.Character:FindFirstChild("UpperTorso")
+            if targetPart then
+                local predPos = targetPart.Position + (targetPart.Velocity * prediction)
+                local targetPos = Camera:WorldToViewportPoint(predPos)
+                local mousePos = UserInputService:GetMouseLocation()
+
+                local moveX = (targetPos.X - mousePos.X) * smoothness
+                local moveY = (targetPos.Y - mousePos.Y) * smoothness
+
+                mousemoverel(moveX, moveY)
+            end
+        end
+    else
+        currentTarget = nil
+    end
+end)
+
+Rayfield:Notify({
+    Title = "Future Aimbot",
+    Content = "เพิ่ม Wall Check สำเร็จแล้ว!\nเปิด Wall Check เพื่อไม่เล็งผ่านกำแพง",
+    Duration = 8,
+})
